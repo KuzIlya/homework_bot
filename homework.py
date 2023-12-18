@@ -19,16 +19,11 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-logging.basicConfig(
-    format='%(asctime)s, %(levelname)s, %(message)s',
-    level=logging.DEBUG,
-    filemode='w',
-    filename='main.log'
-)
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
+logger.addHandler(
+    logging.StreamHandler()
+)
 
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
@@ -51,30 +46,44 @@ EMPTY_LIST_ERROR = 'Список пуст'
 RESPONSE_NOT_DICT = 'response не является словарем'
 HOMEWORKS_VALUE_NOT_LIST = 'По ключу homeworks данные не являются списком'
 RESPONSE_KEY_ERROR = 'Отсутствие ожидаемых ключей в response'
+RESPONSE_KEY_ERROR_WITH_INFO = 'Отсутствие ожидаемых ключей в response {error}'
 UNDEFINED_DICT_KEY_ERROR = 'Ключ в словаре не найден, {error}'
 
+LOG_SEND_REQUEST = ('Программа начала запрос по url: {url}, '
+                    'headers: {headers}, params: {params}')
 
-def check_tokens() -> bool:
+
+def check_tokens() -> list:
     """Проверяет доступность переменных окружения."""
-    for token in (PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID):
-        if token is None:
-            logger.critical(EMPTY_TOKEN_ERROR.format(token=token))
-            return False
-        if not token:
-            logger.critical(MISSING_TOKEN_ERROR.format(token=token))
-            return False
-    return True
+    tokens_info = {
+        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
+        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
+        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID,
+    }
+
+    missing_tokens = [
+        (token_name, 'None') if token_value is None else (token_name, '')
+        for token_name, token_value in tokens_info.items() if not token_value
+    ]
+
+    if missing_tokens:
+        for token_name, token_value in missing_tokens:
+            logger.critical(f'Пустая обязательная переменная окружения: '
+                            f'{token_name} со значением: {token_value}')
+    return missing_tokens
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
     """Отправляет сообщение в чат, определяемый TELEGRAM_CHAT_ID."""
     try:
+        logger.debug('Начало отправки сообщения')
         bot.send_message(TELEGRAM_CHAT_ID, message)
     except telegram.error.TelegramError as error:
         msg = SEND_MESSAGE_ERROR.format(error=error, message=message)
         logger.error(msg)
         raise SendMessageError(msg) from error
-    logging.debug(f'Сообщение отправлено: {message}')
+    else:
+        logging.debug(f'Сообщение отправлено: {message}')
 
 
 def get_api_answer(timestamp: int) -> dict:
@@ -85,22 +94,20 @@ def get_api_answer(timestamp: int) -> dict:
         'params': {'from_date': timestamp}
     }
     try:
+        logger.debug(LOG_SEND_REQUEST.format(**params))
         response = requests.get(**params)
         if response.status_code != HTTPStatus.OK:
             msg = ENDPOINT_STATUS_ERROR.format(
                 status=response.status_code,
                 **params
             )
-            logger.error(msg)
             raise EndpointStatusError(msg)
         return response.json()
     except requests.exceptions.RequestException as error:
         msg = REQUEST_EXCEPTION_ERROR.format(error=error)
-        logger.error(msg)
         raise RequestExceptionError(msg) from error
     except json.JSONDecodeError as error:
         msg = JSON_DECODE_ERROR.format(error=error)
-        logger.error(msg)
         raise JSONDecodeError(msg) from error
 
 
@@ -109,14 +116,17 @@ def check_response(response: dict) -> dict:
     if not isinstance(response, dict):
         logger.error(RESPONSE_NOT_DICT)
         raise TypeError(RESPONSE_NOT_DICT)
-    if response.get('homeworks') is None:
+
+    homeworks = response.get('homeworks')
+
+    if homeworks is None:
         logger.error(RESPONSE_KEY_ERROR)
         raise ResponseAPIKeyError(RESPONSE_KEY_ERROR)
-    if not isinstance(response['homeworks'], list):
+    if not isinstance(homeworks, list):
         logger.error(HOMEWORKS_VALUE_NOT_LIST)
         raise TypeError(HOMEWORKS_VALUE_NOT_LIST)
     try:
-        return response.get('homeworks')[0]
+        return homeworks[0]
     except IndexError as error:
         logger.error(EMPTY_LIST_ERROR)
         raise IndexError(EMPTY_LIST_ERROR) from error
@@ -136,25 +146,45 @@ def parse_status(homework: dict) -> str:
 
 def main() -> None:
     """Основная логика работы бота."""
-    if not check_tokens():
-        raise GlobalTokensError('Отсутствие глобальной переменной')
+    if check_tokens():
+        raise GlobalTokensError(
+            ', '.join(
+                f'{token_name}: {token_value}'
+                for token_name, token_value in check_tokens()
+            )
+        )
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time())
+    timestamp = 0
+    old_status = None
 
     while True:
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)
             message = parse_status(homework)
-            send_message(bot, message)
-            timestamp = response.get('current_date')
+
+            if old_status != message:
+                send_message(bot, message)
+                old_status = message
+
+            timestamp = response.get('current_date', timestamp)
+        except ResponseAPIKeyError as error:
+            logger.error(RESPONSE_KEY_ERROR_WITH_INFO.format(error=error))
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
+            logger.error(message)
             send_message(bot, message)
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        format=('%(asctime)s, %(module)s, %(lineno)s, '
+                '%(funcName)s, %(levelname)s, %(message)s'),
+        level=logging.DEBUG,
+        filemode='w',
+        filename='main.log'
+    )
     main()
