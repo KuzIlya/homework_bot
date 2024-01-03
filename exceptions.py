@@ -9,10 +9,6 @@ class ResponseAPIKeyError(Exception):
     """Отсутствие ожидаемых ключей в ответе API."""
 
 
-class SendMessageError(Exception):
-    """Ошибка при отправке сообщения."""
-
-
 class EndpointStatusError(Exception):
     """Ошибка, возникающая если статус ответа отличен от 200."""
 

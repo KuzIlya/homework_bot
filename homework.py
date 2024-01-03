@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 import time
 from http import HTTPStatus
 
@@ -10,7 +11,7 @@ from dotenv import load_dotenv
 
 from exceptions import (EndpointStatusError, GlobalTokensError,
                         JSONDecodeError, RequestExceptionError,
-                        ResponseAPIKeyError, SendMessageError)
+                        ResponseAPIKeyError)
 
 load_dotenv()
 
@@ -22,7 +23,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(
-    logging.StreamHandler()
+    logging.StreamHandler(sys.stdout)
 )
 
 RETRY_PERIOD = 600
@@ -63,12 +64,13 @@ def check_tokens() -> list:
 
     missing_tokens = [
         (token_name, 'None') if token_value is None else (token_name, '')
-        for token_name, token_value in tokens_info.items() if not token_value
+        for token_name, token_value in tokens_info.items()
+        if token_value is None
     ]
 
     if missing_tokens:
         for token_name, token_value in missing_tokens:
-            logger.critical(f'Пустая обязательная переменная окружения: '
+            logger.critical('Пустая обязательная переменная окружения: '
                             f'{token_name} со значением: {token_value}')
     return missing_tokens
 
@@ -81,7 +83,6 @@ def send_message(bot: telegram.Bot, message: str) -> None:
     except telegram.error.TelegramError as error:
         msg = SEND_MESSAGE_ERROR.format(error=error, message=message)
         logger.error(msg)
-        raise SendMessageError(msg) from error
     else:
         logging.debug(f'Сообщение отправлено: {message}')
 
@@ -125,11 +126,8 @@ def check_response(response: dict) -> dict:
     if not isinstance(homeworks, list):
         logger.error(HOMEWORKS_VALUE_NOT_LIST)
         raise TypeError(HOMEWORKS_VALUE_NOT_LIST)
-    try:
-        return homeworks[0]
-    except IndexError as error:
-        logger.error(EMPTY_LIST_ERROR)
-        raise IndexError(EMPTY_LIST_ERROR) from error
+
+    return homeworks
 
 
 def parse_status(homework: dict) -> str:
@@ -140,17 +138,16 @@ def parse_status(homework: dict) -> str:
         verdict = HOMEWORK_VERDICTS[status]
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
     except KeyError as error:
-        logger.error(UNDEFINED_DICT_KEY_ERROR.format(error=error))
         raise KeyError(UNDEFINED_DICT_KEY_ERROR.format(error=error)) from error
 
 
 def main() -> None:
     """Основная логика работы бота."""
-    if check_tokens():
+    if token_names := check_tokens():
         raise GlobalTokensError(
             ', '.join(
                 f'{token_name}: {token_value}'
-                for token_name, token_value in check_tokens()
+                for token_name, token_value in token_names
             )
         )
 
@@ -161,7 +158,7 @@ def main() -> None:
     while True:
         try:
             response = get_api_answer(timestamp)
-            homework = check_response(response)
+            homework = check_response(response)[0]
             message = parse_status(homework)
 
             if old_status != message:
@@ -174,7 +171,9 @@ def main() -> None:
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             logger.error(message)
-            send_message(bot, message)
+            if old_status != message:
+                old_status = message
+                send_message(bot, message)
         finally:
             time.sleep(RETRY_PERIOD)
 
