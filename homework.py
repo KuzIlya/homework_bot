@@ -63,15 +63,15 @@ def check_tokens() -> list:
     }
 
     missing_tokens = [
-        (token_name, 'None') if token_value is None else (token_name, '')
+        token_name
         for token_name, token_value in tokens_info.items()
         if token_value is None
     ]
 
     if missing_tokens:
-        for token_name, token_value in missing_tokens:
+        for token_name in missing_tokens:
             logger.critical('Пустая обязательная переменная окружения: '
-                            f'{token_name} со значением: {token_value}')
+                            f'{token_name} со значением: None')
     return missing_tokens
 
 
@@ -115,16 +115,13 @@ def get_api_answer(timestamp: int) -> dict:
 def check_response(response: dict) -> dict:
     """Проверяет ответ API на соответствие документации."""
     if not isinstance(response, dict):
-        logger.error(RESPONSE_NOT_DICT)
         raise TypeError(RESPONSE_NOT_DICT)
 
     homeworks = response.get('homeworks')
 
     if homeworks is None:
-        logger.error(RESPONSE_KEY_ERROR)
         raise ResponseAPIKeyError(RESPONSE_KEY_ERROR)
     if not isinstance(homeworks, list):
-        logger.error(HOMEWORKS_VALUE_NOT_LIST)
         raise TypeError(HOMEWORKS_VALUE_NOT_LIST)
 
     return homeworks
@@ -146,8 +143,8 @@ def main() -> None:
     if token_names := check_tokens():
         raise GlobalTokensError(
             ', '.join(
-                f'{token_name}: {token_value}'
-                for token_name, token_value in token_names
+                f'{token_name}: None'
+                for token_name in token_names
             )
         )
 
